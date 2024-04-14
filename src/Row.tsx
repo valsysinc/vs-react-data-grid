@@ -21,6 +21,7 @@ function Row<R, SR>(
     row,
     viewportColumns,
     selectedCellEditor,
+    selectedRange,
     onCellClick,
     onCellDoubleClick,
     onCellContextMenu,
@@ -29,6 +30,10 @@ function Row<R, SR>(
     onMouseEnter,
     onRowChange,
     selectCell,
+    cellStyles,
+    dragPos,
+    draggedOverRange,
+    updateDraggedOverRange,
     ...props
   }: RenderRowProps<R, SR>,
   ref: React.Ref<HTMLDivElement>
@@ -62,7 +67,14 @@ function Row<R, SR>(
       index += colSpan - 1;
     }
 
-    const isCellSelected = selectedCellIdx === idx;
+    const isCellFocused = selectedCellIdx === idx;
+    const isCellSelected =
+      !isCellFocused && !!(selectedRange && selectedRange[0] <= idx && selectedRange[1] >= idx);
+    const isCellDraggedOver = !!(
+      draggedOverRange &&
+      draggedOverRange[0] <= idx &&
+      draggedOverRange[1] >= idx
+    );
 
     if (isCellSelected && selectedCellEditor) {
       cells.push(selectedCellEditor);
@@ -75,13 +87,17 @@ function Row<R, SR>(
           row={row}
           rowIdx={rowIdx}
           isCopied={copiedCellIdx === idx}
-          isDraggedOver={draggedOverCellIdx === idx}
+          isDraggedOver={isCellDraggedOver}
+          isCellFocused={isCellFocused}
           isCellSelected={isCellSelected}
           onClick={onCellClick}
           onDoubleClick={onCellDoubleClick}
           onContextMenu={onCellContextMenu}
           onRowChange={handleRowChange}
           selectCell={selectCell}
+          cellStyles={cellStyles?.[column.idx]}
+          dragPos={dragPos}
+          updateDraggedOverRange={updateDraggedOverRange}
         />
       );
     }

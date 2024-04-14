@@ -4,6 +4,7 @@ import { css } from '@linaria/core';
 
 import DataGrid, { SelectColumn, textEditor } from '../../src';
 import type { Column, CopyEvent, FillEvent, PasteEvent } from '../../src';
+import type { CellStyles } from '../../src/types';
 import { renderAvatar, renderDropdown } from './renderers';
 import type { Props } from './types';
 
@@ -16,6 +17,14 @@ const highlightClassname = css`
   &:hover .rdg-cell {
     background-color: #800080;
   }
+`;
+
+const highlightClassname1 = css`
+  background-color: red !important;
+`;
+
+const highlightClassname2 = css`
+  color: blue !important;
 `;
 
 export interface Row {
@@ -195,8 +204,24 @@ export default function AllFeatures({ direction }: Props) {
     }
   }
 
+  const styles: Record<number, Record<number, CellStyles>> = [];
+  styles[2] = [];
+  styles[3] = [];
+  styles[2][3] = {
+    classes: highlightClassname1,
+    style: { fontWeight: 'bold' }
+  };
+  styles[3][2] = {
+    classes: `${highlightClassname1} ${highlightClassname2}`,
+    style: { textDecoration: 'underline' }
+  };
+  styles[3][3] = {
+    loading: true
+  };
+
   return (
     <DataGrid
+      cellStyles={styles}
       columns={columns}
       rows={rows}
       rowKeyGetter={rowKeyGetter}

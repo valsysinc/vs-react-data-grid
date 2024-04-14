@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import clsx from 'clsx';
 
-import type { CalculatedColumn, CalculatedColumnOrColumnGroup } from '../types';
+import type { CalculatedColumn, CalculatedColumnOrColumnGroup, CellStyles } from '../types';
 import { cellClassname, cellFrozenClassname } from '../style/cell';
 
 export function getRowStyle(rowIdx: number, height?: number): CSSProperties {
@@ -42,13 +42,15 @@ export function getHeaderCellStyle<R, SR>(
 
 export function getCellStyle<R, SR>(
   column: CalculatedColumn<R, SR>,
-  colSpan = 1
+  colSpan = 1,
+  cellStyles?: CellStyles
 ): React.CSSProperties {
   const index = column.idx + 1;
   return {
     gridColumnStart: index,
     gridColumnEnd: index + colSpan,
-    insetInlineStart: column.frozen ? `var(--rdg-frozen-left-${column.idx})` : undefined
+    insetInlineStart: column.frozen ? `var(--rdg-frozen-left-${column.idx})` : undefined,
+    ...cellStyles?.style
   };
 }
 
