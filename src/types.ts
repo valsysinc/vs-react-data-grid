@@ -96,9 +96,17 @@ export type CalculatedColumnOrColumnGroup<R, SR> =
   | CalculatedColumnParent<R, SR>
   | CalculatedColumn<R, SR>;
 
+export interface GridSelection {
+  colStart: number;
+  colEnd: number;
+  rowStart: number;
+  rowEnd: number;
+}
+
 export interface Position {
   readonly idx: number;
   readonly rowIdx: number;
+  sel?: GridSelection | undefined;
 }
 
 export interface RenderCellProps<TRow, TSummaryRow = unknown> {
@@ -148,9 +156,14 @@ export interface CellRendererProps<TRow, TSummaryRow>
     > {
   column: CalculatedColumn<TRow, TSummaryRow>;
   colSpan: number | undefined;
+  isCellFocused: boolean;
   isCopied: boolean;
   isDraggedOver: boolean;
   isCellSelected: boolean;
+  rowIdx: number;
+  cellStyles: CellStyles | undefined;
+  dragPos: React.MutableRefObject<DragPosition<TRow, TSummaryRow> | undefined>;
+  updateDraggedOverRange: () => void;
   onClick: RenderRowProps<TRow, TSummaryRow>['onCellClick'];
   onDoubleClick: RenderRowProps<TRow, TSummaryRow>['onCellDoubleClick'];
   onContextMenu: RenderRowProps<TRow, TSummaryRow>['onCellContextMenu'];
@@ -224,6 +237,11 @@ export interface RenderRowProps<TRow, TSummaryRow = unknown>
   onRowChange: (column: CalculatedColumn<TRow, TSummaryRow>, rowIdx: number, newRow: TRow) => void;
   rowClass: Maybe<(row: TRow, rowIdx: number) => Maybe<string>>;
   setDraggedOverRowIdx: ((overRowIdx: number) => void) | undefined;
+  selectedRange: number[] | undefined;
+  cellStyles: Record<number, CellStyles> | undefined;
+  dragPos: React.MutableRefObject<DragPosition<TRow, TSummaryRow> | undefined>;
+  draggedOverRange: number[] | undefined;
+  updateDraggedOverRange: () => void;
 }
 
 export interface RowsChangeData<R, SR = unknown> {
@@ -239,6 +257,13 @@ export interface FillEvent<TRow> {
   columnKey: string;
   sourceRow: TRow;
   targetRow: TRow;
+
+  // legacy props
+  direction?: string;
+  fromRow?: number;
+  toRow?: number;
+  fromCol?: number;
+  toCol?: number;
 }
 
 export interface CopyEvent<TRow> {
@@ -308,3 +333,26 @@ export interface Renderers<TRow, TSummaryRow> {
 }
 
 export type Direction = 'ltr' | 'rtl';
+
+export type TSelection = 'SELECT' | 'DRAG' | 'REORDER';
+
+export interface DragPosition<R, SR> {
+  startRowIdx: number;
+  startIdx: number;
+  column: CalculatedColumn<R, SR>;
+  selType: TSelection;
+  lastRowIdx?: number;
+  lastIdx?: number;
+}
+
+export interface CellStyles {
+  style?: React.CSSProperties;
+  loading?: boolean;
+  classes?: string;
+}
+
+export interface ScrollDragOptions {
+  maxPixels?: number;
+  baseSpeed?: number;
+  acceleration?: number;
+}

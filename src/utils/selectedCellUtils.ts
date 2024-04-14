@@ -113,6 +113,7 @@ export function getNextSelectedCellPosition<R, SR>({
   isCellWithinBounds
 }: GetNextSelectedCellPositionOpts<R, SR>): Position {
   let { idx: nextIdx, rowIdx: nextRowIdx } = nextPosition;
+  const { sel } = nextPosition;
   const columnsCount = columns.length;
 
   const setColSpan = (moveNext: boolean) => {
@@ -194,7 +195,7 @@ export function getNextSelectedCellPosition<R, SR>({
     if (isAfterLastColumn) {
       const isLastRow = nextRowIdx === maxRowIdx;
       if (!isLastRow) {
-        nextIdx = 0;
+        nextIdx = 1;
         nextRowIdx += 1;
       }
     } else if (isBeforeFirstColumn) {
@@ -225,7 +226,8 @@ export function getNextSelectedCellPosition<R, SR>({
     }
   }
 
-  return { idx: nextIdx, rowIdx: nextRowIdx };
+  if (nextIdx < 1) nextIdx = 1;
+  return { idx: nextIdx, rowIdx: nextRowIdx, sel };
 }
 
 interface CanExitGridOpts {
