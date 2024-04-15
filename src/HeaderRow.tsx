@@ -31,6 +31,7 @@ const headerRow = css`
     line-height: var(--rdg-header-row-height);
     background-color: var(--rdg-header-background-color);
     font-weight: bold;
+    text-align: right;
 
     & > .${cell} {
       /* Should have a higher value than 1 to show up above regular cells and the focus sink */
@@ -45,6 +46,12 @@ const headerRow = css`
 `;
 
 export const headerRowClassname = `rdg-header-row ${headerRow}`;
+
+const rowReorderTarget = css`
+  cursor: grabbing !important;
+  border-bottom: 2px solid var(--rdg-cell-selection-color);
+`;
+export const rowReorderTargetClassname = `rdg-row-reorder-target ${rowReorderTarget}`;
 
 function HeaderRow<R, SR, K extends React.Key>({
   rowIdx,

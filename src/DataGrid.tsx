@@ -1,4 +1,12 @@
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import type { Key, KeyboardEvent, RefAttributes } from 'react';
 import { flushSync } from 'react-dom';
 import clsx from 'clsx';
@@ -36,16 +44,20 @@ import type {
   CellMouseEvent,
   CellNavigationMode,
   CellSelectArgs,
+  CellStyles,
   Column,
   ColumnOrColumnGroup,
   CopyEvent,
   Direction,
+  DragPosition,
   FillEvent,
+  GridSelection,
   Maybe,
   PasteEvent,
   Position,
   Renderers,
   RowsChangeData,
+  ScrollDragOptions,
   SelectRowEvent,
   SortColumn
 } from './types';
@@ -87,6 +99,7 @@ type DefaultColumnOptions<R, SR> = Pick<
 >;
 
 export interface DataGridHandle {
+  focusGrid: () => void;
   element: HTMLDivElement | null;
   scrollToCell: (position: PartialPosition) => void;
   selectCell: (position: Position, enableEditor?: Maybe<boolean>) => void;
@@ -190,6 +203,13 @@ export interface DataGridProps<R, SR = unknown, K extends Key = Key> extends Sha
   /** @default 'ltr' */
   direction?: Maybe<Direction>;
   'data-testid'?: Maybe<string>;
+
+  /**
+   * Valsys
+   */
+  cellStyles?: Record<number, Record<number, CellStyles>>;
+  reorderRows?: boolean;
+  scrollDragOptions?: ScrollDragOptions;
 }
 
 /**
@@ -241,6 +261,8 @@ function DataGrid<R, SR, K extends Key>(
     style,
     rowClass,
     direction: rawDirection,
+    cellStyles,
+    scrollDragOptions = {},
     // ARIA
     role: rawRole,
     'aria-label': ariaLabel,
@@ -282,6 +304,7 @@ function DataGrid<R, SR, K extends Key>(
   const [isDragging, setDragging] = useState(false);
   const [draggedOverRowIdx, setOverRowIdx] = useState<number | undefined>(undefined);
   const [scrollToPosition, setScrollToPosition] = useState<PartialPosition | null>(null);
+  const [draggedOverRange, setDraggedOverRange] = useState<(number[] | undefined)[]>([]);
 
   const getColumnWidth = useCallback(
     (column: CalculatedColumn<R, SR>) => {
@@ -333,6 +356,14 @@ function DataGrid<R, SR, K extends Key>(
   const lastSelectedRowIdx = useRef(-1);
   const focusSinkRef = useRef<HTMLDivElement>(null);
   const shouldFocusCellRef = useRef(false);
+  const dragPos = useRef<DragPosition<R, SR>>();
+  const updateScrollInterval = useRef<ReturnType<typeof setInterval>>();
+  const progScroll = useRef<{ top: number; bottom: number; right: number; left: number }>({
+    top: 1,
+    bottom: 1,
+    right: 1,
+    left: 1
+  });
 
   /**
    * computed values
@@ -444,13 +475,59 @@ function DataGrid<R, SR, K extends Key>(
       return;
     }
 
+    if (selectedPosition.sel && selectedPosition.sel !== prevSelectedPosition.current.sel) {
+      let newSelIdx;
+      let newSelRowIdx;
+      // expanding selection
+      if (prevSelectedPosition.current.sel) {
+        newSelIdx =
+          selectedPosition.sel.colStart !== prevSelectedPosition.current.sel.colStart
+            ? selectedPosition.sel.colStart
+            : selectedPosition.sel.colEnd;
+        newSelRowIdx =
+          selectedPosition.sel.rowStart !== prevSelectedPosition.current.sel.rowStart
+            ? selectedPosition.sel.rowStart
+            : selectedPosition.sel.rowEnd;
+      } else {
+        // new selection
+        newSelIdx =
+          selectedPosition.idx === selectedPosition.sel.colStart
+            ? selectedPosition.sel.colEnd
+            : selectedPosition.sel.colStart;
+        newSelRowIdx =
+          selectedPosition.rowIdx === selectedPosition.sel.rowStart
+            ? selectedPosition.sel.rowEnd
+            : selectedPosition.sel.rowStart;
+      }
+      const isFullSelection =
+        (selectedPosition.sel.colStart === selectedPosition.sel.colEnd &&
+          selectedPosition.sel.rowStart === 0 &&
+          selectedPosition.sel.rowEnd === rows.length - 1) ||
+        (selectedPosition.sel.rowStart === selectedPosition.sel.rowEnd &&
+          selectedPosition.sel.colStart === 1 &&
+          selectedPosition.sel.colEnd === columns.length - 1) ||
+        (selectedPosition.sel.rowStart === 0 &&
+          selectedPosition.sel.rowEnd === rows.length - 1 &&
+          selectedPosition.sel.colStart === 0 &&
+          selectedPosition.sel.colEnd === columns.length - 1);
+      if (!isFullSelection) setScrollToPosition({ idx: newSelIdx, rowIdx: newSelRowIdx });
+    } else {
+      setScrollToPosition({ idx: selectedPosition.idx, rowIdx: selectedPosition.rowIdx });
+    }
+
     prevSelectedPosition.current = selectedPosition;
 
     if (selectedPosition.idx === -1) {
       focusSinkRef.current!.focus({ preventScroll: true });
       scrollIntoView(focusSinkRef.current);
     }
-  });
+  }, [
+    columns.length,
+    rows.length,
+    selectedCellIsWithinSelectionBounds,
+    selectedPosition,
+    setScrollToPosition
+  ]);
 
   useLayoutEffect(() => {
     if (!shouldFocusCellRef.current) return;
@@ -470,8 +547,70 @@ function DataGrid<R, SR, K extends Key>(
         setScrollToPosition({ idx: scrollToIdx, rowIdx: scrollToRowIdx });
       }
     },
-    selectCell
+    selectCell,
+    focusGrid: () => focusSinkRef.current!.focus()
   }));
+
+  const updateEdgeScroll = useCallback(
+    (e: MouseEvent) => {
+      if (!dragPos.current) return;
+      const { lastRowIdx, lastIdx } = dragPos.current;
+      if (typeof lastIdx === 'undefined' || typeof lastRowIdx === 'undefined') return;
+      const { current } = gridRef;
+      if (!current) return;
+
+      const isCellAtLeftBoundary = e.clientX <= totalFrozenColumnWidth + current.offsetLeft + 20;
+      const isCellAtRightBoundary = e.clientX >= window.innerWidth - 20;
+      const isCellAtTopBoundary = getRowTop(lastRowIdx) - current.scrollTop <= 20;
+      const isCellAtBottomBoundary = e.clientY >= window.innerHeight - 15;
+
+      const isBoundary =
+        isCellAtBottomBoundary ||
+        isCellAtLeftBoundary ||
+        isCellAtRightBoundary ||
+        isCellAtTopBoundary;
+
+      if (!updateScrollInterval.current && isBoundary) {
+        const { maxPixels = 60, baseSpeed = 10, acceleration = 1.01 } = scrollDragOptions;
+        updateScrollInterval.current = setInterval(() => {
+          if (isCellAtBottomBoundary) {
+            current.scrollTop += progScroll.current.bottom;
+            progScroll.current.bottom = Math.min(
+              progScroll.current.bottom * acceleration,
+              maxPixels
+            );
+          } else progScroll.current.bottom = 1;
+          if (isCellAtRightBoundary) {
+            current.scrollLeft += progScroll.current.right;
+            progScroll.current.right = Math.min(progScroll.current.right * acceleration, maxPixels);
+          } else progScroll.current.right = 1;
+          if (isCellAtTopBoundary) {
+            current.scrollTop -= progScroll.current.top;
+            progScroll.current.top = Math.min(progScroll.current.top * acceleration, maxPixels);
+          } else progScroll.current.top = 1;
+          if (isCellAtLeftBoundary) {
+            current.scrollLeft -= progScroll.current.left;
+            progScroll.current.left = Math.min(progScroll.current.left * acceleration, maxPixels);
+          } else progScroll.current.left = 1;
+        }, baseSpeed);
+      }
+
+      if (!isBoundary) {
+        clearInterval(updateScrollInterval.current);
+        updateScrollInterval.current = undefined;
+        progScroll.current = { top: 1, bottom: 1, left: 1, right: 1 };
+      }
+    },
+    [getRowTop, gridRef, scrollDragOptions, totalFrozenColumnWidth]
+  );
+
+  useEffect(() => {
+    window.addEventListener('mousemove', updateEdgeScroll);
+
+    return () => {
+      window.removeEventListener('mousemove', updateEdgeScroll);
+    };
+  }, [updateEdgeScroll]);
 
   /**
    * callbacks
@@ -575,6 +714,11 @@ function DataGrid<R, SR, K extends Key>(
 
     switch (event.key) {
       case 'Escape':
+        if (selectedPosition.sel) {
+          const newSelPos = { ...selectedPosition, idx: selectedPosition.idx || 1 };
+          newSelPos.sel = undefined;
+          selectCell(newSelPos);
+        }
         setCopiedCell(null);
         return;
       case 'ArrowUp':
@@ -589,8 +733,38 @@ function DataGrid<R, SR, K extends Key>(
         navigate(event);
         break;
       default:
-        handleCellInput(event);
+        if (!isCtrlKeyHeldDown(event)) handleCellInput(event);
         break;
+    }
+  }
+
+  function updateSelection(
+    cse: string,
+    row: number,
+    col: number,
+    sel: GridSelection | undefined
+  ): GridSelection {
+    if (sel) sel = { ...sel };
+    else sel = { rowStart: row, rowEnd: row, colStart: col, colEnd: col };
+    switch (cse) {
+      case 'ArrowUp':
+        if (sel.rowEnd > row) sel.rowEnd -= 1;
+        else sel.rowStart -= 1;
+        return sel;
+      case 'ArrowDown':
+        if (sel.rowStart < row) sel.rowStart += 1;
+        else sel.rowEnd += 1;
+        return sel;
+      case 'ArrowLeft':
+        if (sel.colEnd > col) sel.colEnd -= 1;
+        else sel.colStart -= 1;
+        return sel;
+      case 'ArrowRight':
+        if (sel.colStart < col) sel.colStart += 1;
+        else sel.colEnd += 1;
+        return sel;
+      default:
+        return sel;
     }
   }
 
@@ -730,17 +904,21 @@ function DataGrid<R, SR, K extends Key>(
   }
 
   function getNextPosition(key: string, ctrlKey: boolean, shiftKey: boolean): Position {
-    const { idx, rowIdx } = selectedPosition;
+    const { idx, rowIdx, sel } = selectedPosition;
     const isRowSelected = selectedCellIsWithinSelectionBounds && idx === -1;
 
     switch (key) {
       case 'ArrowUp':
+        if (shiftKey) return { idx, rowIdx, sel: updateSelection(key, rowIdx, idx, sel) };
         return { idx, rowIdx: rowIdx - 1 };
       case 'ArrowDown':
+        if (shiftKey) return { idx, rowIdx, sel: updateSelection(key, rowIdx, idx, sel) };
         return { idx, rowIdx: rowIdx + 1 };
       case leftKey:
+        if (shiftKey) return { idx, rowIdx, sel: updateSelection(key, rowIdx, idx, sel) };
         return { idx: idx - 1, rowIdx };
       case rightKey:
+        if (shiftKey) return { idx, rowIdx, sel: updateSelection(key, rowIdx, idx, sel) };
         return { idx: idx + 1, rowIdx };
       case 'Tab':
         return { idx: idx + (shiftKey ? -1 : 1), rowIdx };
@@ -1008,13 +1186,65 @@ function DataGrid<R, SR, K extends Key>(
           lastFrozenColumnIndex,
           onRowChange: handleFormatterRowChangeLatest,
           selectCell: selectCellLatest,
-          selectedCellEditor: getCellEditor(rowIdx)
+          selectedCellEditor: getCellEditor(rowIdx),
+          selectedRange: getSelectedCellsRange(rowIdx),
+          cellStyles: cellStyles?.[rowIdx],
+          dragPos,
+          draggedOverRange: draggedOverRange[rowIdx],
+          updateDraggedOverRange: updateDraggedOverCellsRange
         })
       );
     }
 
     return rowElements;
   }
+
+  /** Recompute dragged over matrix */
+  const updateDraggedOverCellsRange = useCallback(() => {
+    if (!dragPos.current) {
+      setDraggedOverRange([]);
+      return;
+    }
+    const { lastRowIdx, lastIdx, selType, startIdx, startRowIdx } = dragPos.current;
+    if (typeof lastIdx === 'undefined' || typeof lastRowIdx === 'undefined') return;
+    if (lastIdx < 1 || lastRowIdx < 0) return;
+
+    const newRanges: (number[] | undefined)[] = [];
+    const rowsIdxs: number[] = Array.from(
+      new Array(Math.max(startRowIdx, lastRowIdx) - Math.min(startRowIdx, lastRowIdx) + 1),
+      (_, i) => i + Math.min(startRowIdx, lastRowIdx)
+    );
+
+    for (const currentRowIdx of rowsIdxs) {
+      if (selType === 'DRAG' && Math.abs(startIdx - lastIdx) > Math.abs(startRowIdx - lastRowIdx)) {
+        // drag across cols
+        newRanges[currentRowIdx] = [startIdx, lastIdx].sort((a, b) => a - b);
+      } else {
+        // drag across rows
+        const isDraggedOver =
+          startRowIdx < lastRowIdx
+            ? startRowIdx <= currentRowIdx && currentRowIdx <= lastRowIdx
+            : startRowIdx >= currentRowIdx && currentRowIdx >= lastRowIdx;
+
+        if (!isDraggedOver) return;
+        if (selType === 'SELECT')
+          newRanges[currentRowIdx] = [startIdx, lastIdx].sort((a, b) => a - b);
+        if (selType === 'DRAG') newRanges[currentRowIdx] = [startIdx, startIdx];
+      }
+    }
+
+    setDraggedOverRange(newRanges);
+  }, []);
+
+  /** Based on current selected position selection get a valid column range if the row range is valid */
+  const getSelectedCellsRange = (rowIdx: number): number[] | undefined => {
+    const { sel } = selectedPosition;
+    if (!sel) return undefined;
+    if (sel.rowStart <= rowIdx && sel.rowEnd >= rowIdx) {
+      return [sel.colStart, sel.colEnd];
+    }
+    return undefined;
+  };
 
   // Reset the positions if the current values are no longer valid. This can happen if a column or row is removed
   if (selectedPosition.idx > maxColIdx || selectedPosition.rowIdx > maxRowIdx) {
@@ -1215,7 +1445,14 @@ function getCellToScroll(gridEl: HTMLDivElement) {
 }
 
 function isSamePosition(p1: Position, p2: Position) {
-  return p1.idx === p2.idx && p1.rowIdx === p2.rowIdx;
+  return (
+    p1.idx === p2.idx &&
+    p1.rowIdx === p2.rowIdx &&
+    p1.sel?.colStart === p2.sel?.colStart &&
+    p1.sel?.colEnd === p2.sel?.colEnd &&
+    p1.sel?.rowStart === p2.sel?.rowStart &&
+    p1.sel?.rowEnd === p2.sel?.rowEnd
+  );
 }
 
 export default forwardRef(DataGrid) as <R, SR = unknown, K extends Key = Key>(
