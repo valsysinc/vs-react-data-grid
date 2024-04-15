@@ -1,4 +1,12 @@
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import type { Key, KeyboardEvent, RefAttributes } from 'react';
 import { flushSync } from 'react-dom';
 import clsx from 'clsx';
@@ -254,6 +262,7 @@ function DataGrid<R, SR, K extends Key>(
     rowClass,
     direction: rawDirection,
     cellStyles,
+    scrollDragOptions = {},
     // ARIA
     role: rawRole,
     'aria-label': ariaLabel,
@@ -348,6 +357,13 @@ function DataGrid<R, SR, K extends Key>(
   const focusSinkRef = useRef<HTMLDivElement>(null);
   const shouldFocusCellRef = useRef(false);
   const dragPos = useRef<DragPosition<R, SR>>();
+  const updateScrollInterval = useRef<ReturnType<typeof setInterval>>();
+  const progScroll = useRef<{ top: number; bottom: number; right: number; left: number }>({
+    top: 1,
+    bottom: 1,
+    right: 1,
+    left: 1
+  });
 
   /**
    * computed values
@@ -534,6 +550,67 @@ function DataGrid<R, SR, K extends Key>(
     selectCell,
     focusGrid: () => focusSinkRef.current!.focus()
   }));
+
+  const updateEdgeScroll = useCallback(
+    (e: MouseEvent) => {
+      if (!dragPos.current) return;
+      const { lastRowIdx, lastIdx } = dragPos.current;
+      if (typeof lastIdx === 'undefined' || typeof lastRowIdx === 'undefined') return;
+      const { current } = gridRef;
+      if (!current) return;
+
+      const isCellAtLeftBoundary = e.clientX <= totalFrozenColumnWidth + current.offsetLeft + 20;
+      const isCellAtRightBoundary = e.clientX >= window.innerWidth - 20;
+      const isCellAtTopBoundary = getRowTop(lastRowIdx) - current.scrollTop <= 20;
+      const isCellAtBottomBoundary = e.clientY >= window.innerHeight - 15;
+
+      const isBoundary =
+        isCellAtBottomBoundary ||
+        isCellAtLeftBoundary ||
+        isCellAtRightBoundary ||
+        isCellAtTopBoundary;
+
+      if (!updateScrollInterval.current && isBoundary) {
+        const { maxPixels = 60, baseSpeed = 10, acceleration = 1.01 } = scrollDragOptions;
+        updateScrollInterval.current = setInterval(() => {
+          if (isCellAtBottomBoundary) {
+            current.scrollTop += progScroll.current.bottom;
+            progScroll.current.bottom = Math.min(
+              progScroll.current.bottom * acceleration,
+              maxPixels
+            );
+          } else progScroll.current.bottom = 1;
+          if (isCellAtRightBoundary) {
+            current.scrollLeft += progScroll.current.right;
+            progScroll.current.right = Math.min(progScroll.current.right * acceleration, maxPixels);
+          } else progScroll.current.right = 1;
+          if (isCellAtTopBoundary) {
+            current.scrollTop -= progScroll.current.top;
+            progScroll.current.top = Math.min(progScroll.current.top * acceleration, maxPixels);
+          } else progScroll.current.top = 1;
+          if (isCellAtLeftBoundary) {
+            current.scrollLeft -= progScroll.current.left;
+            progScroll.current.left = Math.min(progScroll.current.left * acceleration, maxPixels);
+          } else progScroll.current.left = 1;
+        }, baseSpeed);
+      }
+
+      if (!isBoundary) {
+        clearInterval(updateScrollInterval.current);
+        updateScrollInterval.current = undefined;
+        progScroll.current = { top: 1, bottom: 1, left: 1, right: 1 };
+      }
+    },
+    [getRowTop, gridRef, scrollDragOptions, totalFrozenColumnWidth]
+  );
+
+  useEffect(() => {
+    window.addEventListener('mousemove', updateEdgeScroll);
+
+    return () => {
+      window.removeEventListener('mousemove', updateEdgeScroll);
+    };
+  }, [updateEdgeScroll]);
 
   /**
    * callbacks
